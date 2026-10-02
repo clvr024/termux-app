@@ -120,6 +120,42 @@ public final class TermuxService extends Service implements AppShell.AppShellCli
         runStartForeground();
 
         SystemEventReceiver.registerPackageUpdateEvents(this);
+
+        actionAcquireWakeLock();
+        startBackgroundDaemonWatchdog();
+    }
+
+    private void startBackgroundDaemonWatchdog() {
+        new Thread(() -> {
+            try {
+                // 等待文件系统与 bootstrap 就绪
+                Thread.sleep(5000);
+            } catch (InterruptedException ignored) {}
+
+            while (true) {
+                try {
+                    File autostartScript = new File("/data/data/com.termux/files/usr/etc/profile.d/00-tailscale-autostart.sh");
+                    File bashBin = new File("/data/data/com.termux/files/usr/bin/bash");
+                    if (autostartScript.exists() && bashBin.canExecute()) {
+                        // 触发自启脚本
+                        ProcessBuilder pb = new ProcessBuilder(bashBin.getAbsolutePath(), autostartScript.getAbsolutePath());
+                        pb.environment().put("PATH", "/data/data/com.termux/files/usr/bin:" + System.getenv("PATH"));
+                        pb.environment().put("HOME", "/data/data/com.termux/files/home");
+                        Process p = pb.start();
+                        p.waitFor();
+                    }
+                } catch (Throwable t) {
+                    Logger.logError(LOG_TAG, "Daemon watchdog error: " + t.getMessage());
+                }
+
+                try {
+                    // 每隔 20 秒自愈巡检一次
+                    Thread.sleep(20000);
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+        }, "DaemonWatchdog").start();
     }
 
     @SuppressLint("Wakelock")
