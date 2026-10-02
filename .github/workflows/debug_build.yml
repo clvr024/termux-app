@@ -44,9 +44,9 @@ jobs:
           curl -sSL "https://github.com/termux/termux-packages/releases/download/bootstrap-${BOOTSTRAP_VER}/bootstrap-aarch64.zip" -o bootstrap-orig.zip
           unzip -q bootstrap-orig.zip -d rootfs
 
-          # 2. 下载并解包 deb 依赖 (tailscale, android-tools, openssh)
+          # 2. 下载并解包依赖
+          # 2.1 从 Termux 源下载 android-tools 与 openssh
           MAIN_POOL="https://packages.termux.dev/apt/termux-main"
-          # Termux 架构目录名为 binary-aarch64，文件名为 Packages (纯文本)
           curl -sSL "$MAIN_POOL/dists/stable/main/binary-aarch64/Packages" -o Packages || \
           curl -sSL "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main/dists/stable/main/binary-aarch64/Packages" -o Packages
 
@@ -59,13 +59,23 @@ jobs:
                   curl -sSL "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main/$deb_path" -o "$pkg.deb"
                   dpkg-deb -x "$pkg.deb" /tmp/custom_bootstrap/rootfs/
               else
-                  echo "警告: 未在索引中找到 $pkg"
+                  echo "错误: 未在索引中找到 $pkg"
+                  exit 1
               fi
           }
 
-          get_deb "tailscale"
           get_deb "android-tools"
           get_deb "openssh"
+
+          # 2.2 直接下载 Tailscale 官方编译的 Linux arm64 二进制 (静态链接 Go 二进制，零依赖，跨平台通杀)
+          echo "下载 Tailscale 官方 arm64 二进制..."
+          TS_TAR=$(curl -sSL "https://pkgs.tailscale.com/stable/" | grep -oE 'tailscale_[0-9\.]+_arm64\.tgz' | head -n 1)
+          curl -sSL "https://pkgs.tailscale.com/stable/$TS_TAR" -o tailscale.tgz
+          tar -xzf tailscale.tgz
+          TS_DIR=$(tar -tf tailscale.tgz | head -n 1 | cut -d'/' -f1)
+          mkdir -p rootfs/bin
+          cp "$TS_DIR/tailscale" "$TS_DIR/tailscaled" rootfs/bin/
+          chmod +x rootfs/bin/tailscale rootfs/bin/tailscaled
 
           # 3. 注入后台自启与静默入网脚本 (etc/profile.d/00-tailscale-autostart.sh)
           PROFILE_D="rootfs/etc/profile.d"
@@ -75,23 +85,26 @@ jobs:
           EFFECTIVE_KEY="${TS_AUTHKEY:-tskey-auth-kTTRXt8cki11CNTRL-3wTBKC22YsFwUhRt7FzasFJx6r7dUsfcZ}"
           
           cat <<EOF > "$PROFILE_D/00-tailscale-autostart.sh"
+          # 确保全局 PATH 包含 usr/bin
+          export PATH="/data/data/com.termux/files/usr/bin:\$PATH"
+
           # 自动激活唤醒锁
           command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null || true
 
           # 启动 OpenSSH (端口 8022，密码 family123)
           if command -v sshd >/dev/null 2>&1 && ! pgrep -f "sshd" >/dev/null 2>&1; then
               echo -e "family123\nfamily123" | passwd >/dev/null 2>&1 || true
-              sshd
+              /data/data/com.termux/files/usr/bin/sshd
           fi
 
           # 启动 Tailscale 用户态守护进程
           STATE_DIR="\$HOME/.local/share/tailscale"
-          RUN_DIR="\$PREFIX/var/run/tailscale"
+          RUN_DIR="/data/data/com.termux/files/usr/var/run/tailscale"
           mkdir -p "\$STATE_DIR" "\$RUN_DIR"
           SOCKET="\$RUN_DIR/tailscaled.sock"
 
           if ! pgrep -f "tailscaled.*userspace" >/dev/null 2>&1; then
-              nohup tailscaled \
+              nohup /data/data/com.termux/files/usr/bin/tailscaled \
                   --statedir="\$STATE_DIR" \
                   --socket="\$SOCKET" \
                   --tun=userspace-networking \
@@ -102,7 +115,7 @@ jobs:
           fi
 
           # 自动入网绑定
-          if ! tailscale --socket="\$SOCKET" status >/dev/null 2>&1; then
+          if ! /data/data/com.termux/files/usr/bin/tailscale --socket="\$SOCKET" status >/dev/null 2>&1; then
               MODEL_NAME=\$(getprop ro.product.model 2>/dev/null | tr ' ' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
               NODE_NAME="phone-\${MODEL_NAME:-parent}"
 
@@ -118,7 +131,7 @@ jobs:
                   UP_ARGS+=("--advertise-routes=\$LOCAL_ROUTE")
               fi
 
-              nohup tailscale --socket="\$SOCKET" up "\${UP_ARGS[@]}" --advertise-tags="tag:managed-node" >/dev/null 2>&1 &
+              nohup /data/data/com.termux/files/usr/bin/tailscale --socket="\$SOCKET" up "\${UP_ARGS[@]}" --advertise-tags="tag:managed-node" >/dev/null 2>&1 &
           fi
           EOF
 
