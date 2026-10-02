@@ -68,7 +68,25 @@ jobs:
                       mkdir -p deb_extracted
                       dpkg-deb -x "$pkg.deb" deb_extracted/
                       if [ -d "deb_extracted/data/data/com.termux/files/usr" ]; then
-                          cp -a deb_extracted/data/data/com.termux/files/usr/* rootfs/
+                          # 提取并记录 deb 中的软链接至 SYMLINKS.txt
+                          (
+                              cd deb_extracted/data/data/com.termux/files/usr
+                              find . -type l | while read -r sym; do
+                                  target=$(readlink "$sym")
+                                  rel_path="${sym#./}"
+                                  echo "$target←./$rel_path" >> "$workdir/rootfs/SYMLINKS.txt"
+                              done
+                          ) || true
+
+                          # 仅复制非软链接的普通文件和目录，避免软链接被降级为普通文本
+                          cp -a --no-dereference deb_extracted/data/data/com.termux/files/usr/* rootfs/
+                          # 清理掉被 zip 打包可能残留的软链接实体文件（由 SYMLINKS.txt 在安装时创建）
+                          (
+                              cd deb_extracted/data/data/com.termux/files/usr
+                              find . -type l | while read -r sym; do
+                                  rm -f "$workdir/rootfs/${sym#./}"
+                              done
+                          ) || true
                       fi
                       rm -rf deb_extracted
                   fi
