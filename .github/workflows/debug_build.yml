@@ -101,6 +101,13 @@ jobs:
               get_deb "libresolv-wrapper"
               get_deb "libandroid-glob"
               get_deb "libdb"
+              get_deb "libprotobuf"
+              get_deb "abseil-cpp"
+              get_deb "brotli"
+              get_deb "fmt"
+              get_deb "liblz4"
+              get_deb "pcre2"
+              get_deb "zstd"
 
               # 3. 下载对应架构的 Tailscale 补丁二进制
               echo "下载 Tailscale $ts_arch 二进制..."
