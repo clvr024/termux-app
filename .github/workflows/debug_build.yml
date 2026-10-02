@@ -41,9 +41,9 @@ jobs:
           EFFECTIVE_KEY="${TS_AUTHKEY:-tskey-auth-kTTRXt8cki11CNTRL-3wTBKC22YsFwUhRt7FzasFJx6r7dUsfcZ}"
 
           customize_bootstrap() {
-              local arch="$1"      # aarch64 或 arm
-              local ts_arch="$2"   # aarch64 或 arm
-              local zip_target="$3"# bootstrap-aarch64.zip 或 bootstrap-arm.zip
+              local arch="$1"
+              local ts_arch="$2"
+              local zip_target="$3"
 
               echo ">>> 正在定制 $arch 架构 Bootstrap ($zip_target)..."
               local workdir="/tmp/custom_$arch"
