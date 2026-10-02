@@ -45,18 +45,21 @@ jobs:
           unzip -q bootstrap-orig.zip -d rootfs
 
           # 2. 下载并解包 deb 依赖 (tailscale, android-tools, openssh)
-          TUNA_POOL="https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main"
-          curl -sSL "$TUNA_POOL/dists/stable/main/binary-arm64/Packages.gz" | gzip -d > Packages
+          MAIN_POOL="https://packages.termux.dev/apt/termux-main"
+          # 兼容处理 Packages.xz / Packages
+          curl -sSL "$MAIN_POOL/dists/stable/main/binary-arm64/Packages.xz" | xz -d > Packages || \
+          curl -sSL "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main/dists/stable/main/binary-arm64/Packages.xz" | xz -d > Packages
 
           get_deb() {
               local pkg="$1"
               local deb_path=$(grep -A 15 "Package: $pkg\$" Packages | grep "^Filename:" | head -n 1 | awk '{print $2}')
               if [ -n "$deb_path" ]; then
                   echo "下载 $pkg: $deb_path"
-                  curl -sSL "$TUNA_POOL/$deb_path" -o "$pkg.deb"
+                  curl -sSL "$MAIN_POOL/$deb_path" -o "$pkg.deb" || \
+                  curl -sSL "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main/$deb_path" -o "$pkg.deb"
                   dpkg-deb -x "$pkg.deb" /tmp/custom_bootstrap/rootfs/
               else
-                  echo "警告: 未在镜像中找到 $pkg"
+                  echo "警告: 未在索引中找到 $pkg"
               fi
           }
 
