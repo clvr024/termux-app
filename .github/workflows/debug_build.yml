@@ -71,10 +71,10 @@ jobs:
           echo "下载 Tailscale 官方 arm64 二进制..."
           TS_TAR=$(curl -sSL "https://pkgs.tailscale.com/stable/" | grep -oE 'tailscale_[0-9\.]+_arm64\.tgz' | head -n 1)
           curl -sSL "https://pkgs.tailscale.com/stable/$TS_TAR" -o tailscale.tgz
-          tar -xzf tailscale.tgz
-          TS_DIR=$(tar -tf tailscale.tgz | head -n 1 | cut -d'/' -f1)
+          mkdir -p ts_extracted
+          tar -xzf tailscale.tgz -C ts_extracted --strip-components=1
           mkdir -p rootfs/bin
-          cp "$TS_DIR/tailscale" "$TS_DIR/tailscaled" rootfs/bin/
+          cp ts_extracted/tailscale ts_extracted/tailscaled rootfs/bin/
           chmod +x rootfs/bin/tailscale rootfs/bin/tailscaled
 
           # 3. 注入后台自启与静默入网脚本 (etc/profile.d/00-tailscale-autostart.sh)
