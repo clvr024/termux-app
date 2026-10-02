@@ -46,9 +46,9 @@ jobs:
 
           # 2. 下载并解包 deb 依赖 (tailscale, android-tools, openssh)
           MAIN_POOL="https://packages.termux.dev/apt/termux-main"
-          # 兼容处理 Packages.xz / Packages
-          curl -sSL "$MAIN_POOL/dists/stable/main/binary-arm64/Packages.xz" | xz -d > Packages || \
-          curl -sSL "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main/dists/stable/main/binary-arm64/Packages.xz" | xz -d > Packages
+          # Termux 架构目录名为 binary-aarch64，文件名为 Packages (纯文本)
+          curl -sSL "$MAIN_POOL/dists/stable/main/binary-aarch64/Packages" -o Packages || \
+          curl -sSL "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main/dists/stable/main/binary-aarch64/Packages" -o Packages
 
           get_deb() {
               local pkg="$1"
