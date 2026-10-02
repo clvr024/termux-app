@@ -1,3 +1,39 @@
+# 家庭管家 (Home Keeper / Remote Node)
+
+> 本分支为基于 Termux 官方源码深度定制的**家庭设备远程运维与管理客户端**。专为远程协助父母手机及打通家庭局域网电视维护设计，实现安装即用、开箱穿透、全静默组网。
+
+---
+
+### 🌟 定制特性与核心能力
+
+1. **开箱即用，零配置启动**：
+   - App 首次启动解压后，自动常驻后台唤醒锁（`termux-wake-lock` 防休眠）。
+   - 自动拉起 OpenSSH 服务（端口 `8022`，默认临时维护密码 `family123`）。
+   - 自动启动 Tailscale（免 Root 用户态 `userspace-networking` 模式，**完全不占用 Android 系统 VPN 槽位**）。
+
+2. **静默组网与零信任隔离**：
+   - 构建阶段已通过 GitHub Actions 动态注入认证凭据，启动自动接入指定虚拟专网。
+   - 强制绑定 `tag:managed-node` 安全标签：仅管理员（你的设备）拥有单向穿透访问该手机的权限，该手机无法横向访问你名下的任何其他设备。
+   - 自动识别手机所连家庭 Wi-Fi 局域网段并广播子网路由（Subnet Routes），便于远程直连客厅电视或路由器后台。
+
+3. **原生集成维护工具栈**：
+   - 预集成 `android-tools`（ADB 工具链）、`openssh`、`tailscale`，无需用户在手机端联网下载安装包。
+
+### 🚀 远程连接方式
+
+在管理员电脑/手机端（接入同一 Tailscale 虚拟网后）：
+
+```bash
+# 1. 直接通过 Tailscale 分配的 IP 登录父母手机终端
+ssh -p 8022 <父母设备Tailscale-IP>
+# 默认密码: family123
+
+# 2. 登录后直接在父母手机终端操纵家里电视
+adb connect 192.168.x.x:5555
+```
+
+---
+
 # Termux application
 
 [![Build status](https://github.com/termux/termux-app/workflows/Build/badge.svg)](https://github.com/termux/termux-app/actions)
