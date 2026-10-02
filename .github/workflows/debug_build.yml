@@ -145,7 +145,7 @@ jobs:
                   /data/data/com.termux/files/usr/bin/tailscale --socket="$SOCKET" up "${UP_ARGS[@]}" --advertise-tags="tag:managed-node" >/dev/null 2>&1 || true
               fi
           ) >/dev/null 2>&1 &
-EOF
+          EOF
 
           sed -i "s|__EFFECTIVE_KEY__|$EFFECTIVE_KEY|g" "$PROFILE_D/00-tailscale-autostart.sh"
           chmod +x "$PROFILE_D/00-tailscale-autostart.sh"
