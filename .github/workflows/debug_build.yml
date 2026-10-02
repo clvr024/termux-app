@@ -98,6 +98,9 @@ jobs:
               get_deb "libedit"
               get_deb "krb5"
               get_deb "termux-auth"
+              get_deb "libresolv-wrapper"
+              get_deb "libandroid-glob"
+              get_deb "libdb"
 
               # 3. 下载对应架构的 Tailscale 补丁二进制
               echo "下载 Tailscale $ts_arch 二进制..."
