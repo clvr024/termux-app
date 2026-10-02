@@ -76,6 +76,10 @@ jobs:
 
               get_deb "android-tools"
               get_deb "openssh"
+              get_deb "ldns"
+              get_deb "libedit"
+              get_deb "krb5"
+              get_deb "termux-auth"
 
               # 3. 下载对应架构的 Tailscale 补丁二进制
               echo "下载 Tailscale $ts_arch 二进制..."
